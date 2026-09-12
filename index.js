@@ -19,10 +19,8 @@ app.use((req, res, next) => {
   next();
 });
 
- //need to remove the extra 's' in `DB_PASSs` in the MongoDB connection string. It should be `DB_PASS`. Here's the corrected line:
-
 // MongoDB connection setup
-const uri = `mongodb+srv://IntervalServer:${process.env.DB_PASSs}@cluster0.sju0f.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
+const uri = `mongodb+srv://IntervalServer:${process.env.DB_PASS}@cluster0.sju0f.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
 
 const client = new MongoClient(uri, {
   serverApi: {
@@ -68,8 +66,7 @@ app.get('/', (req, res) => {
 /**
  * Fetch all users.
  */
-/**
- * app.get('/all-users', async (req, res) => {
+app.get('/all-users', async (req, res) => {
   try {
     await getDatabase();
     const users = await UserDataCollection.find().toArray();
@@ -110,9 +107,7 @@ app.post('/users', async (req, res) => {
 /**
  * Fetch user by email.
  */
-/**
- * 
- * app.get('/users/:email?', async (req, res) => {
+app.get('/users/:email?', async (req, res) => {
   try {
     const email = req.params.email || req.query.email;
     if (!email) {
@@ -221,10 +216,7 @@ app.post('/add-resort', async (req, res) => {
 /**
  * Fetch all resorts.
  */
-
-
-/** 
- * app.get('/resort-data', async (req, res) => {
+app.get('/resort-data', async (req, res) => {
   try {
     await getDatabase();
     const resorts = await ResortDataCollection.find().toArray();
@@ -274,9 +266,7 @@ app.get('/bookings', async (req, res) => {
 /**
  * Fetch all bookings.
  */
-/**
- * 
- * app.get('/all-bookings', async (req, res) => {
+app.get('/all-bookings', async (req, res) => {
   try {
     await getDatabase();
     const bookings = await allBookingsCollection.find().toArray();
