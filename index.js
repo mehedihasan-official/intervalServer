@@ -1,55 +1,77 @@
 const express = require('express');
 const cors = require('cors');
+const rateLimit = require('express-rate-limit');
 require('dotenv').config();
 const { MongoClient, ServerApiVersion } = require('mongodb');
 
 const app = express();
 const port = process.env.PORT || 5000;
+const databaseName = process.env.DB_NAME || 'Interval';
+
+if (!process.env.DB_PASS && !process.env.MONGODB_URI) {
+  console.warn('MongoDB is not configured. Set MONGODB_URI or DB_PASS before using database routes.');
+}
 
 // Middleware
-app.use(cors());
-app.use(express.json());
+app.use(cors({ origin: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : true }));
+app.use(express.json({ limit: '1mb' }));
+app.use(rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 100,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+}));
 
-// Logging middleware for debugging
+// Keep request logging useful without logging request bodies or personal data.
 app.use((req, res, next) => {
   console.log(`Incoming ${req.method} request to ${req.url}`);
-  if (req.body && Object.keys(req.body).length > 0) {
-    console.log('Request body:', req.body);
-  }
   next();
 });
 
 // MongoDB connection setup
-const uri = `mongodb+srv://IntervalServer:${process.env.DB_PASS}@cluster0.sju0f.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
+const uri = process.env.MONGODB_URI || (
+  process.env.DB_PASS
+    ? `mongodb+srv://IntervalServer:${encodeURIComponent(process.env.DB_PASS)}@cluster0.sju0f.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`
+    : null
+);
 
-const client = new MongoClient(uri, {
+const client = uri ? new MongoClient(uri, {
   serverApi: {
     version: ServerApiVersion.v1,
     strict: true,
     deprecationErrors: true,
   },
-});
+}) : null;
 
 let db, ResortDataCollection, UserDataCollection, allBookingsCollection;
+let databasePromise;
 
 /**
  * Lazy connection to MongoDB.
  * Ensures the database connection is established only when needed.
  */
 async function getDatabase() {
-  if (!db) {
-    try {
-      await client.connect();
-      db = client.db('Interval');
-      ResortDataCollection = db.collection('AllResorts');
-      UserDataCollection = db.collection('users');
-      allBookingsCollection = db.collection('allBookings');
-      console.log('MongoDB connected lazily.');
-    } catch (error) {
-      console.error('Error connecting to MongoDB:', error);
-      throw new Error('Database connection failed');
-    }
+  if (db) return db;
+  if (!client) throw new Error('Database connection is not configured');
+
+  if (!databasePromise) {
+    databasePromise = client.connect()
+      .then(() => {
+        db = client.db(databaseName);
+        ResortDataCollection = db.collection('AllResorts');
+        UserDataCollection = db.collection('users');
+        allBookingsCollection = db.collection('allBookings');
+        console.log('MongoDB connected lazily.');
+        return db;
+      })
+      .catch((error) => {
+        databasePromise = undefined;
+        console.error('Error connecting to MongoDB:', error);
+        throw new Error('Database connection failed');
+      });
   }
+
+  return databasePromise;
 }
 
 // ==================== Routes ====================
@@ -82,18 +104,23 @@ app.get('/all-users', async (req, res) => {
  */
 app.post('/users', async (req, res) => {
   try {
-    const { name, email } = req.body;
-    if (!name || !email) {
+    const { name, email } = req.body || {};
+    if (typeof name !== 'string' || !name.trim() || typeof email !== 'string' || !email.trim()) {
       return res.status(400).send({ message: 'Name and email are required' });
     }
 
     await getDatabase();
-    const existingUser = await UserDataCollection.findOne({ email });
+    const existingUser = await UserDataCollection.findOne({ email: email.trim().toLowerCase() });
     if (existingUser) {
       return res.status(409).send({ message: 'User with this email already exists' });
     }
 
-    const result = await UserDataCollection.insertOne(req.body);
+    const result = await UserDataCollection.insertOne({
+      ...req.body,
+      name: name.trim(),
+      email: email.trim().toLowerCase(),
+      createdAt: new Date(),
+    });
     res.status(201).send({
       message: 'User successfully added',
       userId: result.insertedId,
@@ -131,20 +158,20 @@ app.get('/users/:email?', async (req, res) => {
  * Update user role (admin or not).
  */
 app.patch('/update-user', async (req, res) => {
-  const { email, isAdmin } = req.body;
+  const { email, isAdmin } = req.body || {};
 
   try {
-    if (!email || typeof isAdmin !== 'boolean') {
+    if (typeof email !== 'string' || !email.trim() || typeof isAdmin !== 'boolean') {
       return res.status(400).send('Email and isAdmin status are required');
     }
 
     await getDatabase();
     const result = await UserDataCollection.updateOne(
-      { email },
+      { email: email.trim().toLowerCase() },
       { $set: { isAdmin } }
     );
 
-    if (result.modifiedCount === 0) {
+    if (result.matchedCount === 0) {
       return res.status(404).send('User not found or role not updated');
     }
 
@@ -159,16 +186,20 @@ app.patch('/update-user', async (req, res) => {
  * Update or add user info (e.g., age, security deposit, ID number).
  */
 app.patch('/update-user-info', async (req, res) => {
-  const { email, age, securityDeposit, idNumber } = req.body;
+  const { email, age, securityDeposit, idNumber } = req.body || {};
 
   try {
+    if (typeof email !== 'string' || !email.trim()) {
+      return res.status(400).json({ success: false, message: 'Email is required.' });
+    }
+
     await getDatabase();
     const result = await UserDataCollection.updateOne(
-      { email },
+      { email: email.trim().toLowerCase() },
       { $set: { age, securityDeposit, idNumber } }
     );
 
-    if (result.modifiedCount === 0) {
+    if (result.matchedCount === 0) {
       return res.status(404).json({
         success: false,
         message: 'User not found or information not updated.',
@@ -235,9 +266,13 @@ app.get('/resort-data', async (req, res) => {
 app.post('/bookings', async (req, res) => {
   try {
     const booking = req.body;
+    if (!booking || typeof booking !== 'object' || Array.isArray(booking) || Object.keys(booking).length === 0) {
+      return res.status(400).json({ message: 'Booking data cannot be empty' });
+    }
+
     await getDatabase();
-    const result = await allBookingsCollection.insertOne(booking);
-    res.send(result);
+    const result = await allBookingsCollection.insertOne({ ...booking, createdAt: new Date() });
+    res.status(201).send(result);
   } catch (error) {
     console.error('Error adding booking data:', error);
     res.status(500).send('Internal Server Error');
@@ -251,8 +286,12 @@ app.get('/bookings', async (req, res) => {
   const { email } = req.query;
 
   try {
+    if (typeof email !== 'string' || !email.trim()) {
+      return res.status(400).json({ error: 'Email is required' });
+    }
+
     await getDatabase();
-    const bookings = await allBookingsCollection.find({ email }).toArray();
+    const bookings = await allBookingsCollection.find({ email: email.trim().toLowerCase() }).toArray();
     if (!bookings.length) {
       return res.status(404).json({ error: 'No bookings found for this user' });
     }
@@ -279,6 +318,13 @@ app.get('/all-bookings', async (req, res) => {
 
 // ==================== Error Handling ====================
 
+app.use((error, req, res, next) => {
+  if (error instanceof SyntaxError && error.status === 400 && 'body' in error) {
+    return res.status(400).json({ message: 'Request body must be valid JSON' });
+  }
+  next(error);
+});
+
 /**
  * Catch-all route for undefined routes.
  */
@@ -291,13 +337,20 @@ app.all('*', (req, res) => {
 /**
  * Graceful shutdown on SIGINT (Ctrl+C).
  */
-process.on('SIGINT', () => {
-  client.close();
+async function shutdown() {
+  if (client) await client.close();
   console.log('MongoDB connection closed');
-  process.exit();
-});
+  process.exit(0);
+}
+
+process.once('SIGINT', shutdown);
+process.once('SIGTERM', shutdown);
 
 // Start the server
-app.listen(port, () => {
-  console.log(`Server is running on port ${port}`);
-});
+if (require.main === module) {
+  app.listen(port, () => {
+    console.log(`Server is running on port ${port}`);
+  });
+}
+
+module.exports = app;
