@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node index.js",
     "dev": "nodemon index.js",
-    "test": "node --check index.js"
+    "test": "node --check index.js && node --check app.js && node --check config/database.js && node --check middleware/errorHandler.js && node --check routes/users.js && node --check routes/resorts.js && node --check routes/bookings.js && node --test"
   },
   "author": "",
   "license": "ISC",
