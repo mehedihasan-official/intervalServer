@@ -2,8 +2,8 @@ const express = require('express');
 const { getDatabase } = require('../config/database');
 
 const router = express.Router();
-const MAX_RESORTS_PER_REQUEST = 1700;
-const RESORT_RESPONSE_DELAY_MS = 2_000;
+const MAX_RESORTS_PER_REQUEST = 500;
+const RESORT_RESPONSE_DELAY_MS = 8_000;
 
 router.post('/add-resort', async (req, res) => {
   try {
